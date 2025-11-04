@@ -103,31 +103,105 @@ class TimeSeriesDataset:
         return data
 
     
-    def read(self, fname, channels, start_time = None, end_time = None, group=None):
-        """ Read data from HDF5 format """
+    def read(self, fname, channels, start_time = None, end_time = None, group=None, t0=None, fs=None):
+        """ Read data from HDF5 or NPZ format 
+        
+        Parameters
+        ----------
+        fname : str
+            Path to the data file (.h5 or .npz format)
+        channels : list or str
+            List of channel names to load, or path to file containing channel names
+        start_time : float, optional
+            Start time for cropping data (default: None, uses t0 from file)
+        end_time : float, optional
+            End time for cropping data (default: None, uses full duration)
+        group : str, optional
+            Group name for HDF5 files (default: None)
+        t0 : float, optional
+            Start time if not in file metadata (default: None, will try to read from file)
+        fs : float, optional
+            Sample rate if not in file metadata. Defaults to 2048 Hz for .npz files if not specified
+        """
         # if channels is a file
         if isinstance(channels, str):
             channels = open(channels).read().splitlines()
         target_channel = channels[0]
         
-        # read data from HDF5 file
-        self.data = []
-        self.channels = []
-        with h5py.File(fname, 'r') as f:
-            if group is not None:
-                fobj = f[group]
-            else:
-                fobj = f
+        # Detect file format
+        file_ext = fname.split('.')[-1].lower()
+        
+        if file_ext == 'npz':
+            # Read from NPZ format
+            self.data = []
+            self.channels = []
             
-            for chan, data in fobj.items():
-                if chan not in channels:
-                    continue
-                self.channels.append(chan)
-                self.data.append(data[:])
-                self.t0 = data.attrs['t0']
-                self.fs = data.attrs['sample_rate']
+            with np.load(fname, allow_pickle=True) as f:
+                # Get all keys in the file
+                keys = list(f.keys())
+                
+                # Try to find metadata keys
+                if 't0' in keys:
+                    self.t0 = float(f['t0'])
+                elif t0 is not None:
+                    self.t0 = t0
+                else:
+                    self.t0 = 0.0
+                
+                if 'fs' in keys or 'sample_rate' in keys:
+                    self.fs = float(f.get('fs', f.get('sample_rate', 2048.0)))
+                elif fs is not None:
+                    self.fs = fs
+                else:
+                    # Default to 2048 Hz as user mentioned data is already resampled
+                    self.fs = 2048.0
+                
+                # Load channel data
+                for chan in channels:
+                    if chan in keys:
+                        self.channels.append(chan)
+                        self.data.append(f[chan])
+                    else:
+                        # Try to find channel with case-insensitive matching or partial match
+                        found = False
+                        for key in keys:
+                            if key.lower() == chan.lower() or chan in key or key in chan:
+                                self.channels.append(chan)  # Use original channel name
+                                self.data.append(f[key])
+                                found = True
+                                break
+                        if not found:
+                            print(f"Warning: Channel '{chan}' not found in file. Available keys: {keys}")
+            
+            if len(self.data) == 0:
+                raise ValueError(f"No channels found in file. Available keys: {keys}")
+                
+        elif file_ext in ['h5', 'hdf5']:
+            # Read from HDF5 format
+            self.data = []
+            self.channels = []
+            metadata_set = False
+            with h5py.File(fname, 'r') as f:
+                if group is not None:
+                    fobj = f[group]
+                else:
+                    fobj = f
+                
+                for chan, data in fobj.items():
+                    if chan not in channels:
+                        continue
+                    self.channels.append(chan)
+                    self.data.append(data[:])
+                    # Get metadata from first channel (all should have same t0 and fs)
+                    if not metadata_set:
+                        self.t0 = data.attrs.get('t0', t0 if t0 is not None else 0.0)
+                        self.fs = data.attrs.get('sample_rate', fs if fs is not None else 2048.0)
+                        metadata_set = True
+        else:
+            raise ValueError(f"Unsupported file format: {file_ext}. Supported formats: .npz, .h5, .hdf5")
+        
         self.data = np.stack(self.data)
-        self.channels = np.stack(self.channels)
+        self.channels = np.array(self.channels)
         
         # sorted by channel name
         sorted_indices = np.argsort(self.channels)
