@@ -1,0 +1,4 @@
+time: 1378403243
+duration: 3072
+ifo: H1
+sample rate: 2048
