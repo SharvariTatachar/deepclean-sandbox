@@ -8,7 +8,7 @@ import torch
 
 from gwpy.timeseries import TimeSeries, TimeSeriesDict
 
-from .signal import bandpass
+from signalpost import bandpass
 
 
 class TimeSeriesDataset:

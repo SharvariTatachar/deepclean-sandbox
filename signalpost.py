@@ -1,3 +1,35 @@
+import math
+import warnings
+
+import numpy as np
+import scipy.signal as sig
+
+def bandpass(data, fs, fl, fh, order=None, axis=-1):
+    """ Apply Butterworth bandpass filter using scipy.signal.sosfiltfilt method
+    Parameters
+    ----------
+    data: array
+    fs: sampling frequency
+    fl, fh: low and high frequency for bandpass
+    axis: axis to apply the filter on 
+    
+    Returns:
+    --------
+    data_filt: filtered array 
+    """
+    if order is None:
+        order = 8
+        
+    # Make filter
+    nyq = fs/2.
+    low, high = fl/nyq, fh/nyq  # normalize frequency
+    z, p, k = sig.butter(order, [low, high], btype='bandpass', output='zpk')
+    sos = sig.zpk2sos(z, p, k)
+
+    # Apply filter and return output
+    data_filt = sig.sosfiltfilt(sos, data, axis=axis)
+    return data_filt
+
 def overlap_add(data, noverlap, window, verbose=True):
     """ Concatenate timeseries using the overlap-add method 
     Parameters
