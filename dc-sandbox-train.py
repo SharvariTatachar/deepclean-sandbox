@@ -71,9 +71,7 @@ criterion = dc.criterion.CompositePSDLoss(
     fftlength=fft_length,
     overlap=overlap, 
     psd_weight=psd_weight, 
-    mse_weight=mse_weight, 
-    coh_weight=coh_weight, 
-    tf_weight=tf_weight,
+    mse_weight=mse_weight,
     reduction='sum', 
     device=device, 
     average='mean'
@@ -81,7 +79,7 @@ criterion = dc.criterion.CompositePSDLoss(
 
 lr = 1e-3 
 weight_decay = 1e-3
-optimizer = optim.Adam(model.paramaters(), lr=lr, weight_decay=weight_decay)
+optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 lr_scheduler = optim.lr_scheduler.StepLR(optimizer, 10, 0.1)
 
