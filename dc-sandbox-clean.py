@@ -3,7 +3,9 @@ from torch.utils.data import DataLoader
 
 from gwpy.timeseries import TimeSeries
 from gwpy.timeseries import TimeSeriesDict
-from timeseries import TimeSeriesDataset
+import deepclean as dc 
+import deepclean.timeseries as ts 
+from deepclean.timeseries import TimeSeriesDataset
 
 # Set default tensor type (use CUDA if available, otherwise CPU)
 if torch.cuda.is_available():
@@ -34,7 +36,10 @@ filt_order = 8
 # Apply bandpass filter (typically only on target channel for DeepClean)
 preprocessed = data.bandpass(filt_fl, filt_fh, filt_order, channels='target')
 
+
 # Normalize using the pre-computed mean and std
 preprocessed = preprocessed.normalize(mean=mean, std=std)
 
 print("Preprocessing done")
+
+# TODO: add model and post processing here
