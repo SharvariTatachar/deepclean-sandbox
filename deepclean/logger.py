@@ -97,7 +97,7 @@ class Logger:
         
         if show_epoch:
             logger.info('Epoch: [{}/{}], Batch Num: [{}/{}]'.format(
-                epoch,num_epochs, n_batch, num_batches)
+                epoch + 1, num_epochs, n_batch + 1, num_batches)
                  )
         logger.info('Train {0:}: {1:.4e}, Test {0:}: {2:.4e}'.format(
             name, train_metric, test_metric))

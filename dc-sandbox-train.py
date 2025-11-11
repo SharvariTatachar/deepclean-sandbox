@@ -1,4 +1,5 @@
 import os
+import logging
 import torch 
 import torch.optim as optim 
 from torch.utils.data import DataLoader
@@ -15,11 +16,22 @@ import deepclean.nn as nn
 import deepclean.nn.utils as utils 
 import deepclean.nn.net as net
 from deepclean.timeseries import TimeSeriesDataset
+import deepclean.logger as logger
 
+train_dir = 'train_dir'
+os.makedirs(train_dir, exist_ok=True)
+log = os.path.join(train_dir, 'log.log')
 
-
-# os.makedirs('train_dir', exist_ok=True)
-
+# Set up logging to both file and console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log, mode='a'),  # Write to file
+        logging.StreamHandler()  # Write to console
+    ]
+)
+logging.info('Create training directory: {}'.format(train_dir))
 # For now, use CPU for training: 
 device = dc.nn.utils.get_device('cpu')
 # Using params from deepclean-prod config: 
@@ -30,7 +42,7 @@ val_data = dc.timeseries.TimeSeriesSegmentDataset(kernel=8, stride=0.25, pad_mod
 train_data.read('data/processed/combined_data.npz', channels='SelectedChannels_110_130Hz.ini', start_time=1378403243, end_time=1378403243+3072, fs=2048)
 val_data.read('data/processed/combined_data.npz', channels='SelectedChannels_110_130Hz.ini', start_time=1378403243, end_time=1378403243+3072+3072, fs=2048)
 
-print("preprocessing")
+logging.info('Preprocessing ------------------------- ')
 # bandpass filter: 
 train_data = train_data.bandpass(110, 130, order=8, channels='target')
 val_data = val_data.bandpass(110, 130, order=8, channels='target')
@@ -84,3 +96,7 @@ optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 lr_scheduler = optim.lr_scheduler.StepLR(optimizer, 10, 0.1)
 
 # start training: 
+train_logger = dc.logger.Logger(outdir=train_dir, metrics=['loss'])
+dc.nn.utils.train(
+    train_loader, model, criterion, optimizer, lr_scheduler,
+    val_loader=val_loader, max_epochs=50, logger=train_logger, device=device)

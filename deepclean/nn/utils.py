@@ -18,10 +18,11 @@ def print_train():
     logger.info('')
     logger.info('         ..oo0  ...ooOO00           ')
     logger.info('        ..     ...             !!!  ')
-    logger.info('       ..     ...      o       \o/  ')
-    logger.info('   Y  ..     /III\    /L ---    n   ')
-    logger.info('  ||__II_____|\_/| ___/_\__ ___/_\__')
-    logger.info('  [[____\_/__|/_\|-|______|-|______|')
+
+    logger.info(r'       ..     ...      o       \o/  ')
+    logger.info(r'   Y  ..     /III\    /L ---    n   ')
+    logger.info(r'  ||__II_____|\_/| ___/_\__ ___/_\__')
+    logger.info(r'  [[____\_/__|/_\|-|______|-|______|')
     logger.info(' //0 ()() ()() 0   00    00 00    00')
     logger.info('')
     logger.info('------------------------------------')
@@ -62,7 +63,7 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
     
     # if Logger is not given, create a default logger
     if logger is None:
-        logger = Logger(outdir='outdir', label='run', metrics=['loss'])
+        logger = Logger(outdir='outdir', metrics=['loss'])
     
     # start training
     num_batches = len(train_loader)
@@ -83,12 +84,15 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
             pred = model(witness)
             
             # calculate loss function and backward pass
-            loss = criterion(pred, target, witness)
+            loss = criterion(pred, target)
             loss.backward()
-
+            for name, param in model.named_parameters(): 
+                if torch.isnan(param.grad.any()): 
+                    print(f"NaN gradient detected in {name}")
             # Clip gradients after backward but before step
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
+            for param_group in optimizer.param_groups: 
+                print("LR: ", param_group['lr'])
             # gradient descent
             optimizer.step()
             
@@ -112,7 +116,7 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
                     pred = model(witness)
                 
                     # calculate and update validation loss
-                    loss = criterion(pred, target, witness)
+                    loss = criterion(pred, target)
                     if criterion.reduction == 'mean':
                         val_loss += loss.item() * len(witness)
                     else:
@@ -121,15 +125,17 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
         # Compute average loss over all samples
         train_loss /= len(train_loader.dataset)
         val_loss /= len(val_loader.dataset) if val_loader is not None else 1.0 # avoid divided by 0.
-            
         # Update LR with scheduler at the end of each epoch
         if lr_scheduler is not None:
             lr_scheduler.step()
        
         # Update metric, display, and save
+        # Use num_batches - 1 for the last batch index (0-indexed)
+        last_batch_idx = num_batches - 1
         logger.update_metric(train_loss, val_loss, 'loss', epoch, 
-                             num_batches, num_batches)
-        logger.display_status(epoch, max_epochs, num_batches, num_batches,
+                             last_batch_idx, num_batches)
+        
+        logger.display_status(epoch, max_epochs, last_batch_idx, num_batches,
                               train_loss, val_loss, 'loss')
         logger.log_metric()
         logger.save_model(model, epoch)
@@ -145,7 +151,7 @@ def evaluate(dataloader, model, criterion=None, device='cpu'):
         for i_batch, (witness, target) in enumerate(dataloader):
             # move to GPU if available
             witness = witness.to(device)
-            target = witness.to(device)
+            target = target.to(device) # target = witness.to(device)
             
             # compute prediction
             pred = model(witness)
