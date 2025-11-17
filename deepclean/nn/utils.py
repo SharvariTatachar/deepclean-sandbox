@@ -10,6 +10,33 @@ import torch
 
 from ..logger import Logger
 
+@torch.no_grad()
+def compute_validation_psd(model, loader, criterion, device):
+    """Compute mean validation PSD and baseline PSD (pred=0) across val_loader."""
+    model.eval()
+    psd_sum, base_sum, n = 0.0, 0.0, 0
+
+    # Handle both CompositePSDLoss and PSDLoss
+    def psd_only(pred, target):
+        return criterion.psd_loss(pred, target) if hasattr(criterion, "psd_loss") else criterion(pred, target)
+
+    for witness, target in loader:
+        witness = witness.to(device)
+        target  = target.to(device)
+        pred = model(witness)
+
+        psd_val  = psd_only(pred, target)
+        base_val = psd_only(torch.zeros_like(pred), target)
+
+        psd_sum  += float(psd_val)
+        base_sum += float(base_val)
+        n += 1
+
+    mean_psd = psd_sum / max(n, 1)
+    mean_base = base_sum / max(n, 1)
+    reduction = 100.0 * (1.0 - mean_psd / mean_base)
+
+    return mean_psd, mean_base, reduction
 
 def print_train():
     ''' Most important function '''
@@ -85,14 +112,20 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
             
             # calculate loss function and backward pass
             loss = criterion(pred, target)
+            if i_batch % 10 == 0:   # print every 10 batches
+                with torch.no_grad():
+                # baseline PSD (pred = 0)
+                    zero_pred = torch.zeros_like(pred)
+                    base_psd = criterion.psd_loss(zero_pred, target) if hasattr(criterion, "psd_loss") else criterion(zero_pred, target)
+                    model_psd = criterion.psd_loss(pred, target) if hasattr(criterion, "psd_loss") else loss
+                    print(f"[Batch {i_batch}] model PSD={model_psd.item():.4e}, baseline={base_psd.item():.4e}, Δ={(base_psd - model_psd).item():.4e}")
+    
             loss.backward()
-            for name, param in model.named_parameters(): 
-                if torch.isnan(param.grad.any()): 
-                    print(f"NaN gradient detected in {name}")
+            # for name, param in model.named_parameters():
+            #     if param.grad is not None and torch.isnan(param.grad).any():
+            #         print(f"⚠️ NaN gradient detected in {name}")
             # Clip gradients after backward but before step
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            for param_group in optimizer.param_groups: 
-                print("LR: ", param_group['lr'])
             # gradient descent
             optimizer.step()
             
@@ -122,9 +155,12 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
                     else:
                         val_loss += loss.item()
         
+        
         # Compute average loss over all samples
         train_loss /= len(train_loader.dataset)
         val_loss /= len(val_loader.dataset) if val_loader is not None else 1.0 # avoid divided by 0.
+        val_psd, val_base, val_red = compute_validation_psd(model, val_loader, criterion, device)
+        print(f"[VAL epoch] PSD={val_psd:.4e} | base={val_base:.4e} | reduction={val_red:.1f}%")
         # Update LR with scheduler at the end of each epoch
         if lr_scheduler is not None:
             lr_scheduler.step()

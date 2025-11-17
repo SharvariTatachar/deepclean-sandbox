@@ -29,46 +29,26 @@ def _torch_welch(data, fs=1.0, nperseg=256, noverlap=None, average='mean',
     T = nsample*fs
    
     # Calculate the PSD
-    psd = torch.zeros((nseg, N, nfreq)).to(device)
-    window =  torch.hann_window(nperseg).to(device)*2
-    
-    # calculate the FFT amplitude of each segment
-    for i in range(nseg):
-        seg_ts = data[:, i*nstride:i*nstride+nperseg]*window
-        seg_fd = torch.fft.rfft(seg_ts, dim=1)
-        
-        # Debug: Print FFT information
-        # if DEBUG_FFT and i == 0:  # Only print for first segment to avoid spam
-        #     print(f"\n[DEBUG _torch_welch] FFT Analysis:")
-        #     print(f"  Input seg_ts shape: {seg_ts.shape}, dtype: {seg_ts.dtype}")
-        #     print(f"  FFT output seg_fd shape: {seg_fd.shape}, dtype: {seg_fd.dtype}")
-        #     print(f"  FFT output is complex: {torch.is_complex(seg_fd)}")
-        #     # Show first few frequency bins
-        #     if seg_fd.numel() > 0:
-        #         print(f"  First 5 FFT values (complex): {seg_fd[0, :5]}")
-        #         print(f"  First 5 FFT magnitudes: {torch.abs(seg_fd[0, :5])}")
-        #         print(f"  First 5 FFT magnitudes squared: {torch.abs(seg_fd[0, :5])**2}")
-        
-        seg_fd_abs = torch.abs(seg_fd)**2
-        
-        # Debug: Verify magnitude calculation
-        # if DEBUG_FFT and i == 0:
-        #     print(f"  seg_fd_abs shape: {seg_fd_abs.shape}, dtype: {seg_fd_abs.dtype}")
-        #     print(f"  First 5 PSD values: {seg_fd_abs[0, :5]}")
-        #     print(f"  PSD min: {seg_fd_abs.min().item():.6e}, max: {seg_fd_abs.max().item():.6e}, mean: {seg_fd_abs.mean().item():.6e}")
-        
-        psd[i] = seg_fd_abs
-    
-    # taking the average
-    if average == 'mean':
-        psd = torch.sum(psd, 0)
-    elif average == 'median':
-        psd = torch.median(psd, 0)[0]*nseg
-    else:
-        raise ValueError(f'average must be "mean" or "median", got {average} instead')
+    starts = list(range(0, max(0, nsample - nperseg + 1), nstride))
+    nseg = len(starts)
+    psd = torch.zeros((nseg, N, nfreq), device=device)
+    window = torch.hann_window(nperseg, device=device) * 2
 
-    # Normalize
-    psd /= T
+    for i, s in enumerate(starts):
+        seg_ts = data[:, s : s + nperseg]  # exactly nperseg long due to starts
+        seg_fd = torch.fft.rfft(seg_ts * window, dim=1)
+        psd[i] = (seg_fd.abs() ** 2)
+
+    # average/median over segments
+    if average == 'mean':
+        psd = psd.mean(dim=0)              # true mean
+    elif average == 'median':
+        psd = psd.median(dim=0).values
+    else:
+        raise ValueError('average must be "mean" or "median"')
+
+    # Normalize — constant factor differences don’t break ratios, but keep it stable
+    psd /= max(T, 1.0)  # T = nsample * fs
     return psd
 
 
@@ -130,119 +110,48 @@ class PSDLoss(nn.Module):
             x, fs=fs, nperseg=nperseg, noverlap=noverlap, device=device)
         
         # Get scaling and masking
-        freq = torch.linspace(0., fs/2., nperseg//2 + 1)
+        freq = torch.linspace(0., fs/2., nperseg//2 + 1, device=device)
         self.dfreq = freq[1] - freq[0]
-        self.mask = torch.zeros(nperseg//2 +1, dtype=torch.bool)
-        self.scale = 0.
+        self.mask = torch.zeros(nperseg//2 +1, dtype=torch.bool, device=device)
+        self.scale = 0.0
         for l, h in zip(fl, fh):
             self.mask = self.mask | (l < freq) & (freq < h)
             self.scale += (h - l)
         self.mask = self.mask.to(device)
-        
-        # Debug: Print mask information
-        # if DEBUG_FFT:
-        #     print(f"\n[DEBUG PSDLoss.__init__] Mask Configuration:")
-        #     print(f"  Frequency range: {freq.min().item():.2f} - {freq.max().item():.2f} Hz")
-        #     print(f"  Number of frequency bins: {len(self.mask)}")
-        #     print(f"  Mask dtype: {self.mask.dtype}")
-        #     # Check if mask is boolean or ByteTensor
-        #     if self.mask.dtype == torch.bool:
-        #         print(f"  ✓ Mask is boolean (correct for PyTorch >= 1.2)")
-        #     else:
-        #         print(f"  ⚠ WARNING: Mask is {self.mask.dtype} (not boolean)!")
-        #         print(f"    This will cause RuntimeError when used for indexing!")
-        #         print(f"    PyTorch requires boolean masks for operations like psd_res[:, ~mask] = 0")
-        #     print(f"  Mask True count: {self.mask.sum().item()} (frequencies kept)")
-        #     print(f"  Mask False count: {(~self.mask).sum().item()} (frequencies masked)")
-        #     print(f"  Frequency ranges to keep: {list(zip(fl, fh))}")
-        #     # Show which frequencies are kept
-        #     kept_freqs = freq[self.mask]
-        #     if len(kept_freqs) > 0:
-        #         print(f"  Kept frequency range: {kept_freqs.min().item():.2f} - {kept_freqs.max().item():.2f} Hz")
-        #     print(f"  Scale factor: {self.scale}")
-        #     print(f"  Frequency resolution (dfreq): {self.dfreq:.6f} Hz")
-        #     # Show sample mask values
-        #     print(f"  First 10 mask values: {self.mask[:10]}")
-        #     print(f"  Last 10 mask values: {self.mask[-10:]}")
+        self.scale = float(self.scale) if self.scale > 0 else float(self.dfreq.item())
+      
     
-    def forward(self, pred, target):
-        
-        # Calculate the PSD of the residual and the target
-        psd_res = self.welch(target - pred)
-        psd_target = self.welch(target)
-        
-        # Debug: Print PSD values before masking
-        # if DEBUG_FFT:
-        #     print(f"\n[DEBUG PSDLoss.forward] PSD Calculation:")
-        #     print(f"  psd_res shape: {psd_res.shape}, dtype: {psd_res.dtype}")
-        #     print(f"  psd_target shape: {psd_target.shape}, dtype: {psd_target.dtype}")
-        #     print(f"  psd_res before masking - min: {psd_res.min().item():.6e}, max: {psd_res.max().item():.6e}, mean: {psd_res.mean().item():.6e}")
-        #     print(f"  psd_res sum before masking: {psd_res.sum().item():.6e}")
-        #     # Show PSD values at a few frequency bins
-        #     if psd_res.shape[0] > 0 and psd_res.shape[1] > 0:
-        #         print(f"  psd_res[0, :5] (first 5 freq bins): {psd_res[0, :5]}")
-            # Check mask before using it
-            # print(f"  About to apply mask - mask dtype: {self.mask.dtype}")
-            # print(f"  Mask shape: {self.mask.shape}, psd_res shape: {psd_res.shape}")
-            # if self.mask.dtype != torch.bool:
-            #     print(f"  ⚠ ERROR: Mask dtype is {self.mask.dtype}, but PyTorch requires torch.bool!")
-            #     print(f"    The next line will fail: psd_res[:, ~self.mask] = 0.")
-            #     print(f"    Fix: Change mask creation to use dtype=torch.bool")
-        
-        # Apply mask - this will fail if mask is not boolean
-        psd_res[:, ~self.mask] = 0.
-        # try:
-        #     psd_res[:, ~self.mask] = 0.
-        # except RuntimeError as e:
-        #     if DEBUG_FFT:
-        #         print(f"  ❌ ERROR during masking: {e}")
-        #         print(f"    Mask dtype: {self.mask.dtype}")
-        #         print(f"    This error occurs because PyTorch requires boolean masks for indexing.")
-        #         print(f"    Solution: Change line 134 from .type(torch.ByteTensor) to dtype=torch.bool")
-        #     raise
-        
-        # Debug: Print PSD values after masking
-        # if DEBUG_FFT:
-        #     print(f"  psd_res after masking - min: {psd_res.min().item():.6e}, max: {psd_res.max().item():.6e}, mean: {psd_res.mean().item():.6e}")
-        #     print(f"  psd_res sum after masking: {psd_res.sum().item():.6e}")
-        #     print(f"  psd_res[0, :5] after masking: {psd_res[0, :5]}")
-        #     # Verify masking worked correctly
-        #     masked_bins = (~self.mask).sum().item()
-        #     zero_bins = (psd_res[0] == 0).sum().item()
-        #     print(f"  Expected zero bins (masked): {masked_bins}, Actual zero bins: {zero_bins}")
+    def forward(self, pred, target, eps: float = 1e-20):
+        # pred, target: (B, T)
+        psd_res    = self.welch(target - pred)   # (B, F)
+        psd_target = self.welch(target)          # (B, F)
 
-        # psd loss is the integration over all frequencies
-        psd_ratio = psd_res/psd_target
-        asd_ratio = torch.sqrt(psd_ratio)
-        
-        # Debug: Print ratio information
-        # if DEBUG_FFT:
-        #     print(f"  psd_ratio shape: {psd_ratio.shape}")
-        #     print(f"  psd_ratio min: {psd_ratio.min().item():.6e}, max: {psd_ratio.max().item():.6e}, mean: {psd_ratio.mean().item():.6e}")
-        #     print(f"  psd_ratio sum (per sample): {psd_ratio.sum(dim=1)[:3] if len(psd_ratio) > 0 else 'N/A'}")
-            
+        # select only masked freqs
+        psd_res_band    = psd_res[:, self.mask]
+        psd_target_band = psd_target[:, self.mask]
+
+        # safe denominator to avoid 0/0 and Inf
+        denom = psd_target_band.clamp_min(eps)
+        psd_ratio = psd_res_band / denom
+
         if self.asd:
-            loss = torch.sum(asd_ratio, 1)*self.dfreq/self.scale
+            # sqrt can create NaN if ratio is negative or inf; clamp first
+            psd_ratio = psd_ratio.clamp_min(0)
+            band_vals = torch.sqrt(psd_ratio)
         else:
-            loss = torch.sum(psd_ratio, 1)*self.dfreq/self.scale
-        
-        # Debug: Print loss information
-        # if DEBUG_FFT:
-        #     print(f"  Loss per sample (before reduction): {loss[:3] if len(loss) > 0 else 'N/A'}")
-        #     print(f"  Loss shape: {loss.shape}")
-        #     print(f"  dfreq: {self.dfreq:.6e}, scale: {self.scale:.2f}")
-        
-        # Averaging over batch
+            band_vals = psd_ratio
+
+        # Integrate over band (approx): sum * df / total_bandwidth
+        # Use bin count * df for more precise normalization than (h-l) sum
+        band_width = self.mask.sum().to(band_vals.dtype) * self.dfreq
+        loss_per_sample = band_vals.sum(dim=1) * self.dfreq / band_width
+
         if self.reduction == 'mean':
-            loss = torch.sum(loss)/len(psd_res)
+            return loss_per_sample.mean()
         elif self.reduction == 'sum':
-            loss = torch.sum(loss)
-        
-        # if DEBUG_FFT:
-        #     print(f"  Final loss value: {loss.item():.6e}\n")
-        
-        return loss     
-    
+            return loss_per_sample.sum()
+        else:
+            return loss_per_sample
     
 class CrossPSDLoss(nn.Module):
     ''' Compute the power spectrum density (PSD) loss, defined 
@@ -284,88 +193,45 @@ class CrossPSDLoss(nn.Module):
             x, fs=fs, nperseg=nperseg, noverlap=noverlap, device=device)
         
         # Get scaling and masking
-        freq = torch.linspace(0., fs/2., nperseg//2 + 1)
+        freq = torch.linspace(0., fs/2., nperseg//2 + 1, device=device)
         self.dfreq = freq[1] - freq[0]
-        self.mask = torch.zeros(nperseg//2 +1, dtype=torch.bool)
-        self.scale = 0.
+        self.mask = torch.zeros(nperseg//2 +1, dtype=torch.bool, device=device)
+        self.scale = 0.0
         for l, h in zip(fl, fh):
             self.mask = self.mask | (l < freq) & (freq < h)
             self.scale += (h - l)
         self.mask = self.mask.to(device)
+        self.scale = float(self.scale) if self.scale > 0 else float(self.dfreq.item())
         
-        # Debug: Print mask information
-        # if DEBUG_FFT:
-        #     print(f"\n[DEBUG CrossPSDLoss.__init__] Mask Configuration:")
-        #     print(f"  Frequency range: {freq.min().item():.2f} - {freq.max().item():.2f} Hz")
-        #     print(f"  Number of frequency bins: {len(self.mask)}")
-        #     print(f"  Mask dtype: {self.mask.dtype}")
-        #     print(f"  Mask True count: {self.mask.sum().item()} (frequencies kept)")
-        #     print(f"  Mask False count: {(~self.mask).sum().item()} (frequencies masked)")
-        #     print(f"  Frequency ranges to keep: {list(zip(fl, fh))}")
-        #     # Show which frequencies are kept
-        #     kept_freqs = freq[self.mask]
-        #     if len(kept_freqs) > 0:
-        #         print(f"  Kept frequency range: {kept_freqs.min().item():.2f} - {kept_freqs.max().item():.2f} Hz")
-        #     print(f"  Scale factor: {self.scale}")
-        #     print(f"  Frequency resolution (dfreq): {self.dfreq:.6f} Hz")
-    
-    def forward(self, pred, target):
-        
+    def forward(self, pred, target, eps: float = 1e-20):
         res = target - pred
-        shape_x = int(self.train_kernel/self.train_stride)
-        shape_y = int(self.batch_size*self.train_stride*self.fs)
-        
-        #cross_res = torch.zeros(res.shape).to(self.device)
-        cross_res = torch.zeros([shape_x, shape_y]).to(self.device)
-        cross_target = torch.zeros([shape_x, shape_y]).to(self.device)
+        shape_x = int(self.train_kernel / self.train_stride)
+        shape_y = int(self.batch_size * self.train_stride * self.fs)
+
+        cross_res    = torch.zeros([shape_x, shape_y], device=self.device)
+        cross_target = torch.zeros([shape_x, shape_y], device=self.device)
         for i in range(cross_res.shape[0]):
-            slice_i_begin = int(i*int(self.train_stride*self.fs))
-            slice_i_end   = int((i+1)*int(self.train_stride*self.fs))
-            slice_res_i  = res[:,slice_i_begin:slice_i_end].flatten()
-            slice_target_i  = target[:,slice_i_begin:slice_i_end].flatten()
-            #print (slice_i.shape, " and ", cross_res.shape)
-            cross_res[i,:]  = slice_res_i
-            cross_target[i,:]  = slice_target_i
-        
-        
-        # Calculate the PSD of the residual and the target
+            s = int(i * int(self.train_stride * self.fs))
+            e = int((i + 1) * int(self.train_stride * self.fs))
+            cross_res[i, :]    = res[:, s:e].flatten()
+            cross_target[i, :] = target[:, s:e].flatten()
+
         psd_res    = self.welch(cross_res)
         psd_target = self.welch(cross_target)
-        
-        # Debug: Print PSD values before masking
-        # if DEBUG_FFT:
-        #     print(f"\n[DEBUG CrossPSDLoss.forward] PSD Calculation:")
-        #     print(f"  cross_res shape: {cross_res.shape}")
-        #     print(f"  psd_res shape: {psd_res.shape}, dtype: {psd_res.dtype}")
-        #     print(f"  psd_target shape: {psd_target.shape}, dtype: {psd_target.dtype}")
-        #     print(f"  psd_res before masking - min: {psd_res.min().item():.6e}, max: {psd_res.max().item():.6e}, mean: {psd_res.mean().item():.6e}")
-        
-        psd_res[:, ~self.mask] = 0.
-        
-        # Debug: Print PSD values after masking
-        # if DEBUG_FFT:
-        #     print(f"  psd_res after masking - min: {psd_res.min().item():.6e}, max: {psd_res.max().item():.6e}, mean: {psd_res.mean().item():.6e}")
 
-        # psd loss is the integration over all frequencies
-        psd_ratio = psd_res/psd_target
-        
-        # if DEBUG_FFT:
-        #     print(f"  psd_ratio shape: {psd_ratio.shape}")
-        #     print(f"  psd_ratio min: {psd_ratio.min().item():.6e}, max: {psd_ratio.max().item():.6e}, mean: {psd_ratio.mean().item():.6e}")
-        
-        loss = torch.sum(psd_ratio, 1)*self.dfreq/self.scale
-        
-        # if DEBUG_FFT:
-        #     print(f"  Loss per segment (before edge selection): {loss}")
-        #     print(f"  Selecting edges: indices [-8,-7,-6,-5,-4,-3,-2,-1]")
-        
-        ## we average over just the 3 timeseries from each edges
-        loss = torch.mean(loss[[-8,-7,-6,-5,-4,-3,-2,-1]]) * len(loss)
-        
-        # if DEBUG_FFT:
-        #     print(f"  Final CrossPSD loss value: {loss.item():.6e}\n")
-        
-        return loss  
+        psd_res_band    = psd_res[:, self.mask]
+        psd_target_band = psd_target[:, self.mask]
+
+        denom = psd_target_band.clamp_min(eps)
+        psd_ratio = psd_res_band / denom
+
+        band_width = self.mask.sum().to(psd_ratio.dtype) * self.dfreq
+        loss_per_seg = psd_ratio.sum(dim=1) * self.dfreq / band_width
+
+        # your “edges” averaging policy; keep as-is but now it’s finite
+        edge_idx = torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1], device=loss_per_seg.device)
+        loss = loss_per_seg.index_select(0, edge_idx).mean() * len(loss_per_seg)
+        return loss
 
     
 class EdgeMSELoss(nn.Module):

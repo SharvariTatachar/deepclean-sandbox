@@ -154,7 +154,7 @@ class TimeSeriesDataset:
                 elif fs is not None:
                     self.fs = fs
                 else:
-                    # Default to 2048 Hz as user mentioned data is already resampled
+                    # Default to 2048 Hz as data is already resampled
                     self.fs = 2048.0
                 
                 # Load channel data

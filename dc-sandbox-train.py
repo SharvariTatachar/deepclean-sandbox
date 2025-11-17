@@ -49,7 +49,7 @@ val_data = val_data.bandpass(110, 130, order=8, channels='target')
 
 # filter pad default from deepclean-prod, is 5: 
 filt_pad = 5 
-fs = 2048 # from info.txt --  TODO: double check with Christina 
+fs = 2048 # from info.txt 
 train_data.data = train_data.data[:, int(filt_pad * fs):-int(filt_pad * fs)]
 val_data.data = val_data.data[:, int(filt_pad * fs):-int(filt_pad * fs)]
 
@@ -99,4 +99,5 @@ lr_scheduler = optim.lr_scheduler.StepLR(optimizer, 10, 0.1)
 train_logger = dc.logger.Logger(outdir=train_dir, metrics=['loss'])
 dc.nn.utils.train(
     train_loader, model, criterion, optimizer, lr_scheduler,
-    val_loader=val_loader, max_epochs=50, logger=train_logger, device=device)
+    val_loader=val_loader, max_epochs=3, logger=train_logger, device=device)
+# max_epochs = 50
