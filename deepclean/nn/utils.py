@@ -68,6 +68,13 @@ def get_device(device):
     ''' Convenient function to set up hardward '''
     if device.lower() == 'cpu':
         device = torch.device('cpu')
+    elif device.lower() == 'mps': 
+        if torch.backends.mps.is_available(): 
+            device = torch.device('mps')
+            logger.info(f'-Use device: {device}')
+        else: 
+            logging.warning('No mps available. Use CPU instead.')
+            device = torch.device('cpu')
     elif 'cuda' in device.lower():
         if torch.cuda.is_available():
             device = torch.device(device)
@@ -80,12 +87,12 @@ def get_device(device):
         logger.info('- Use device: {}'.format(torch.cuda.get_device_name(device)))
         logger.info('- Total memory: {:.4f} GB'.format(total_memory))
     else:
-        logger.info('- Use device: CPU')
+        logger.info('- Use device: CPU -- TODO: change this')
     return device
 
 
-def train(train_loader, model, criterion, optimizer, lr_scheduler, 
-          val_loader=None, max_epochs=1, logger=None, device='cpu'):
+def train(train_loader, model, criterion, device, optimizer, lr_scheduler, 
+          val_loader=None, max_epochs=1, logger=None):
     """ Train network """
     
     # if Logger is not given, create a default logger
@@ -177,7 +184,7 @@ def train(train_loader, model, criterion, optimizer, lr_scheduler,
         logger.save_model(model, epoch)
     
     
-def evaluate(dataloader, model, criterion=None, device='cpu'):
+def evaluate(dataloader, model, device, criterion=None):
     """ Inferring from dataloader. If `criterion` is given, also evaluate performance 
     of the network provided that `dataloader` includes target """
     model.eval()
