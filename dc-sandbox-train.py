@@ -99,5 +99,5 @@ lr_scheduler = optim.lr_scheduler.StepLR(optimizer, 10, 0.1)
 train_logger = dc.logger.Logger(outdir=train_dir, metrics=['loss'])
 dc.nn.utils.train(
     train_loader, model, criterion, device, optimizer, lr_scheduler,
-    val_loader=val_loader, max_epochs=3, logger=train_logger)
+    val_loader=val_loader, max_epochs=5, logger=train_logger)
 # max_epochs = 50
