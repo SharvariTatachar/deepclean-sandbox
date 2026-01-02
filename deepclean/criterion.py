@@ -82,7 +82,7 @@ class PSDLoss(nn.Module):
     as the average over frequency of the PSD ratio '''
     
     
-    def __init__(self, fs=1.0, fl=20., fh=500., fftlength=1., overlap=None, 
+    def __init__(self, fs=1.0, fl=110., fh=130., fftlength=1., overlap=None, 
                  asd=False, average='mean', reduction='mean', device='cpu'):
         super().__init__()
         

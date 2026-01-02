@@ -32,7 +32,7 @@ logging.basicConfig(
     ]
 )
 logging.info('Create training directory: {}'.format(train_dir))
-# For now, use CPU for training: 
+
 device = dc.nn.utils.get_device('mps')
 # Using params from deepclean-prod config: 
 train_data = dc.timeseries.TimeSeriesSegmentDataset(kernel=8, stride=0.25, pad_mode='median')
@@ -61,7 +61,7 @@ val_data = val_data.normalize(mean, std)
 
 # read dataset into DataLoader 
 batch_size = 32 
-num_workers = 0 
+num_workers = 0 # TODO: change to 4 
 train_loader = DataLoader(train_data, batch_size, num_workers)
 val_loader = DataLoader(val_data, batch_size, num_workers)
 
@@ -99,5 +99,5 @@ lr_scheduler = optim.lr_scheduler.StepLR(optimizer, 10, 0.1)
 train_logger = dc.logger.Logger(outdir=train_dir, metrics=['loss'])
 dc.nn.utils.train(
     train_loader, model, criterion, device, optimizer, lr_scheduler,
-    val_loader=val_loader, max_epochs=5, logger=train_logger)
+    val_loader=val_loader, max_epochs=10, logger=train_logger)
 # max_epochs = 50

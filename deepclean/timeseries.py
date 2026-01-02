@@ -8,8 +8,8 @@ import torch
 
 from gwpy.timeseries import TimeSeries, TimeSeriesDict
 import deepclean as dc 
-import deepclean.signalpost as sig
-from deepclean.signalpost import bandpass
+import deepclean.signal as sig
+from deepclean.signal import bandpass
 
 
 class TimeSeriesDataset:
